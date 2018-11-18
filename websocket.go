@@ -1,14 +1,12 @@
 package main
 
 import (
-	"net/http"
-
-	"github.com/gorilla/websocket"
+	"github.com/dgrr/fastws"
 )
 
 // WebSocket is a wrapper around a gorilla.WebSocket for claws.
 type WebSocket struct {
-	conn      *websocket.Conn
+	conn      *fastws.Conn
 	writeChan chan string
 	closed    bool
 	url       string
@@ -32,9 +30,15 @@ func (w *WebSocket) Write(msg string) {
 }
 
 func (w *WebSocket) readChannel(c chan<- string) {
+	var _type fastws.Mode
+	var msg []byte
+	var err error
 	for {
-		_type, msg, err := w.conn.ReadMessage()
+		_type, msg, err = w.conn.ReadMessage(msg[:0])
 		if err != nil {
+			if err == fastws.EOF {
+				w.closed = true
+			}
 			if !w.closed {
 				state.Error(err.Error())
 				w.close(c)
@@ -43,27 +47,15 @@ func (w *WebSocket) readChannel(c chan<- string) {
 		}
 
 		switch _type {
-		case websocket.TextMessage, websocket.BinaryMessage:
+		case fastws.ModeText, fastws.ModeBinary:
 			c <- string(msg)
-		case websocket.CloseMessage:
-			cl := "Closed WebSocket"
-			if len(msg) > 0 {
-				cl += " " + string(msg)
-			}
-			state.Debug(cl)
-			w.close(c)
-			return
-		case websocket.PingMessage, websocket.PongMessage:
-			if len(msg) > 0 {
-				state.Debug("Ping/pong with " + string(msg))
-			}
 		}
 	}
 }
 
 func (w *WebSocket) writePump() {
 	for msg := range w.writeChan {
-		err := w.conn.WriteMessage(websocket.TextMessage, []byte(msg))
+		_, err := w.conn.WriteMessage(fastws.ModeText, []byte(msg))
 		if err != nil {
 			state.Error(err.Error())
 			w.Close()
@@ -85,7 +77,7 @@ func (w *WebSocket) Close() error {
 		state.Conn = nil
 	}
 	close(w.writeChan)
-	return w.conn.Close()
+	return w.conn.Close("Bye bye :)")
 }
 
 // close finalises the WebSocket connection.
@@ -97,8 +89,7 @@ func (w *WebSocket) close(c chan<- string) error {
 // WebSocketResponseError is the error returned when there is an error in
 // CreateWebSocket.
 type WebSocketResponseError struct {
-	Err  error
-	Resp *http.Response
+	Err error
 }
 
 func (w WebSocketResponseError) Error() string {
@@ -109,11 +100,10 @@ func (w WebSocketResponseError) Error() string {
 func CreateWebSocket(url string) (*WebSocket, error) {
 	state.Debug("Starting WebSocket connection to " + url)
 
-	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, err := fastws.Dial(url)
 	if err != nil {
 		return nil, WebSocketResponseError{
-			Err:  err,
-			Resp: resp,
+			Err: err,
 		}
 	}
 
